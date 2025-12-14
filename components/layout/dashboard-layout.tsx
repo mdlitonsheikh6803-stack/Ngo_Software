@@ -19,8 +19,9 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
 
   const navigation = [
     { name: "Dashboard", href: "/dashboard", icon: "📊" },
-    { name: "Donors", href: "/donors", icon: "👥" },
-    { name: "Donations", href: "/donations", icon: "💰" },
+    { name: "Members", href: "/members", icon: "👥" },
+    { name: "Savings", href: "/savings", icon: "💰" },
+    { name: "Loans", href: "/loans", icon: "🏦" },
     { name: "Expenses", href: "/expenses", icon: "📉" },
     { name: "Reports", href: "/reports", icon: "📈" },
   ]
