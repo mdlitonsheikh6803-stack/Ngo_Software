@@ -112,7 +112,6 @@ export default function SavingsPage() {
         .from("members")
         .update({
           total_savings: newTotal,
-          updated_at: new Date().toISOString(),
         })
         .eq("id", formData.memberId)
 

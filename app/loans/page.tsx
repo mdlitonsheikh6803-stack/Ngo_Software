@@ -35,7 +35,7 @@ interface Loan {
   interest_rate: number
   total_amount: number
   paid_amount: number
-  remaining_amount: number
+  balance: number
   issue_date: string
   due_date: string
   status: "active" | "paid" | "overdue"
@@ -48,7 +48,7 @@ interface LoanPayment {
   loan_id: string
   amount: number
   payment_date: string
-  description: string
+  payment_method: string
 }
 
 export default function LoansPage() {
@@ -70,7 +70,8 @@ export default function LoansPage() {
   })
   const [paymentFormData, setPaymentFormData] = useState({
     amount: "",
-    description: "",
+    paymentDate: new Date().toISOString().split("T")[0],
+    paymentMethod: "cash",
   })
   const supabase = createClient()
 
@@ -116,10 +117,13 @@ export default function LoansPage() {
   }, [router])
 
   const handleAddLoan = async () => {
+    console.log("[v0] Starting loan creation...")
     const amount = Number.parseFloat(loanFormData.amount)
     const interestRate = Number.parseFloat(loanFormData.interestRate)
     const totalAmount = amount + amount * (interestRate / 100)
     const loanId = generateLoanId()
+
+    console.log("[v0] Loan data:", { loanId, member_id: loanFormData.memberId, amount, interestRate, totalAmount })
 
     const { error: loanError } = await supabase.from("loans").insert({
       loan_id: loanId,
@@ -128,31 +132,35 @@ export default function LoansPage() {
       interest_rate: interestRate,
       total_amount: totalAmount,
       paid_amount: 0,
-      remaining_amount: totalAmount,
+      balance: totalAmount,
       issue_date: new Date().toISOString(),
       due_date: new Date(loanFormData.dueDate).toISOString(),
       status: "active",
-      purpose: loanFormData.purpose,
     })
 
     if (loanError) {
       console.error("[v0] Error adding loan:", loanError)
+      alert(`Failed to create loan: ${loanError.message}`)
       return
     }
+
+    console.log("[v0] Loan created successfully")
 
     // Update member's total loans
     const member = members.find((m) => m.id === loanFormData.memberId)
     if (member) {
+      console.log("[v0] Updating member total loans...")
       const { error: updateError } = await supabase
         .from("members")
         .update({
           total_loans: Number(member.total_loans) + totalAmount,
-          updated_at: new Date().toISOString(),
         })
         .eq("id", loanFormData.memberId)
 
       if (updateError) {
         console.error("[v0] Error updating member:", updateError)
+      } else {
+        console.log("[v0] Member updated successfully")
       }
     }
 
@@ -166,34 +174,35 @@ export default function LoansPage() {
     if (!loan) return
 
     const paymentAmount = Number.parseFloat(paymentFormData.amount)
+    const newBalance = Number(loan.balance) - paymentAmount
+    const newPaidAmount = Number(loan.paid_amount) + paymentAmount
 
+    // Add payment record
     const { error: paymentError } = await supabase.from("loan_payments").insert({
       loan_id: loan.id,
       amount: paymentAmount,
-      payment_date: new Date().toISOString(),
-      description: paymentFormData.description,
+      payment_date: new Date(paymentFormData.paymentDate).toISOString(),
+      payment_method: paymentFormData.paymentMethod,
     })
 
     if (paymentError) {
-      console.error("[v0] Error adding payment:", paymentError)
+      console.error("Error adding payment:", paymentError)
       return
     }
 
     // Update loan
-    const newPaidAmount = Number(loan.paid_amount) + paymentAmount
-    const newRemainingAmount = Number(loan.total_amount) - newPaidAmount
     const { error: loanUpdateError } = await supabase
       .from("loans")
       .update({
+        balance: newBalance,
         paid_amount: newPaidAmount,
-        remaining_amount: Math.max(0, newRemainingAmount),
-        status: newRemainingAmount <= 0 ? "paid" : loan.status,
-        updated_at: new Date().toISOString(),
+        status: newBalance <= 0 ? "paid" : "active",
       })
       .eq("id", loan.id)
 
     if (loanUpdateError) {
-      console.error("[v0] Error updating loan:", loanUpdateError)
+      console.error("Error updating loan:", loanUpdateError)
+      return
     }
 
     // Update member's total loans
@@ -202,18 +211,17 @@ export default function LoansPage() {
       const { error: memberUpdateError } = await supabase
         .from("members")
         .update({
-          total_loans: Math.max(0, Number(member.total_loans) - paymentAmount),
-          updated_at: new Date().toISOString(),
+          total_loans: Number(member.total_loans) - paymentAmount,
         })
-        .eq("id", member.id)
+        .eq("id", loan.member_id)
 
       if (memberUpdateError) {
-        console.error("[v0] Error updating member:", memberUpdateError)
+        console.error("Error updating member loans:", memberUpdateError)
       }
     }
 
     await loadData()
-    setPaymentFormData({ amount: "", description: "" })
+    setPaymentFormData({ amount: "", paymentDate: new Date().toISOString().split("T")[0], paymentMethod: "cash" })
     setIsPaymentDialogOpen(false)
   }
 
@@ -228,7 +236,7 @@ export default function LoansPage() {
 
   const totalLoansIssued = loans.reduce((sum, l) => sum + Number(l.total_amount), 0)
   const totalPaid = loans.reduce((sum, l) => sum + Number(l.paid_amount), 0)
-  const totalOutstanding = loans.reduce((sum, l) => sum + Number(l.remaining_amount), 0)
+  const totalOutstanding = loans.reduce((sum, l) => sum + Number(l.balance), 0)
   const activeLoans = loans.filter((l) => l.status === "active").length
 
   if (isLoading) {
@@ -426,7 +434,7 @@ export default function LoansPage() {
                           <div className="font-medium text-emerald-600">${Number(loan.paid_amount).toFixed(2)}</div>
                         </td>
                         <td className="py-3 px-4">
-                          <div className="font-medium text-orange-600">${Number(loan.remaining_amount).toFixed(2)}</div>
+                          <div className="font-medium text-orange-600">${Number(loan.balance).toFixed(2)}</div>
                         </td>
                         <td className="py-3 px-4 text-gray-700">{new Date(loan.due_date).toLocaleDateString()}</td>
                         <td className="py-3 px-4">
@@ -482,7 +490,7 @@ export default function LoansPage() {
                         <div className="text-sm text-gray-600">Loan ID: {loan.loan_id}</div>
                         <div className="text-sm text-gray-600">Member: {loan.members?.name}</div>
                         <div className="text-sm font-semibold text-gray-900 mt-1">
-                          Remaining: ${Number(loan.remaining_amount).toFixed(2)}
+                          Remaining: ${Number(loan.balance).toFixed(2)}
                         </div>
                       </>
                     ) : null
@@ -501,12 +509,21 @@ export default function LoansPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="paymentDescription">Description</Label>
+                <Label htmlFor="paymentDate">Payment Date</Label>
                 <Input
-                  id="paymentDescription"
-                  value={paymentFormData.description}
-                  onChange={(e) => setPaymentFormData({ ...paymentFormData, description: e.target.value })}
-                  placeholder="Monthly installment"
+                  id="paymentDate"
+                  type="date"
+                  value={paymentFormData.paymentDate}
+                  onChange={(e) => setPaymentFormData({ ...paymentFormData, paymentDate: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="paymentMethod">Payment Method</Label>
+                <Input
+                  id="paymentMethod"
+                  value={paymentFormData.paymentMethod}
+                  onChange={(e) => setPaymentFormData({ ...paymentFormData, paymentMethod: e.target.value })}
+                  placeholder="cash"
                 />
               </div>
             </div>
