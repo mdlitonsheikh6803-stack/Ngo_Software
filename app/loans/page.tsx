@@ -18,35 +18,36 @@ import {
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
+import { createClient } from "@/lib/supabase/client"
 
 interface Member {
   id: string
-  memberId: string
+  member_id: string
   name: string
-  totalLoans: number
+  total_loans: number
 }
 
 interface Loan {
   id: string
-  loanId: string
-  memberId: string
-  memberName: string
+  loan_id: string
+  member_id: string
   amount: number
-  interestRate: number
-  totalAmount: number
-  paidAmount: number
-  remainingAmount: number
-  issueDate: string
-  dueDate: string
+  interest_rate: number
+  total_amount: number
+  paid_amount: number
+  remaining_amount: number
+  issue_date: string
+  due_date: string
   status: "active" | "paid" | "overdue"
   purpose: string
+  members?: { name: string }
 }
 
 interface LoanPayment {
   id: string
-  loanId: string
+  loan_id: string
   amount: number
-  date: string
+  payment_date: string
   description: string
 }
 
@@ -71,14 +72,37 @@ export default function LoansPage() {
     amount: "",
     description: "",
   })
+  const supabase = createClient()
 
   const generateLoanId = () => {
-    const prefix = "LOAN"
-    const timestamp = Date.now().toString().slice(-6)
-    const random = Math.floor(Math.random() * 1000)
-      .toString()
-      .padStart(3, "0")
-    return `${prefix}${timestamp}${random}`
+    const existingLoans = loans.length
+    return `LOAN${String(existingLoans + 1).padStart(4, "0")}`
+  }
+
+  const loadData = async () => {
+    const [membersResult, loansResult, paymentsResult] = await Promise.all([
+      supabase.from("members").select("id, member_id, name, total_loans").order("name"),
+      supabase.from("loans").select("*, members(name)").order("issue_date", { ascending: false }),
+      supabase.from("loan_payments").select("*").order("payment_date", { ascending: false }),
+    ])
+
+    if (membersResult.error) {
+      console.error("[v0] Error loading members:", membersResult.error)
+    } else {
+      setMembers(membersResult.data || [])
+    }
+
+    if (loansResult.error) {
+      console.error("[v0] Error loading loans:", loansResult.error)
+    } else {
+      setLoans(loansResult.data || [])
+    }
+
+    if (paymentsResult.error) {
+      console.error("[v0] Error loading payments:", paymentsResult.error)
+    } else {
+      setPayments(paymentsResult.data || [])
+    }
   }
 
   useEffect(() => {
@@ -88,120 +112,123 @@ export default function LoansPage() {
       return
     }
 
-    const savedMembers = localStorage.getItem("ngo_members")
-    const savedLoans = localStorage.getItem("ngo_loans")
-    const savedPayments = localStorage.getItem("ngo_loan_payments")
-
-    if (savedMembers) setMembers(JSON.parse(savedMembers))
-    if (savedLoans) setLoans(JSON.parse(savedLoans))
-    if (savedPayments) setPayments(JSON.parse(savedPayments))
-
-    setIsLoading(false)
+    loadData().then(() => setIsLoading(false))
   }, [router])
 
-  const handleAddLoan = () => {
-    const member = members.find((m) => m.id === loanFormData.memberId)
-    if (!member) return
-
+  const handleAddLoan = async () => {
     const amount = Number.parseFloat(loanFormData.amount)
     const interestRate = Number.parseFloat(loanFormData.interestRate)
     const totalAmount = amount + amount * (interestRate / 100)
+    const loanId = generateLoanId()
 
-    const newLoan: Loan = {
-      id: Date.now().toString(),
-      loanId: generateLoanId(),
-      memberId: member.id,
-      memberName: member.name,
+    const { error: loanError } = await supabase.from("loans").insert({
+      loan_id: loanId,
+      member_id: loanFormData.memberId,
       amount,
-      interestRate,
-      totalAmount,
-      paidAmount: 0,
-      remainingAmount: totalAmount,
-      issueDate: new Date().toISOString().split("T")[0],
-      dueDate: loanFormData.dueDate,
+      interest_rate: interestRate,
+      total_amount: totalAmount,
+      paid_amount: 0,
+      remaining_amount: totalAmount,
+      issue_date: new Date().toISOString(),
+      due_date: new Date(loanFormData.dueDate).toISOString(),
       status: "active",
       purpose: loanFormData.purpose,
+    })
+
+    if (loanError) {
+      console.error("[v0] Error adding loan:", loanError)
+      return
     }
 
-    const updatedLoans = [...loans, newLoan]
-    setLoans(updatedLoans)
-    localStorage.setItem("ngo_loans", JSON.stringify(updatedLoans))
-
     // Update member's total loans
-    const updatedMembers = members.map((m) => {
-      if (m.id === member.id) {
-        return { ...m, totalLoans: m.totalLoans + totalAmount }
-      }
-      return m
-    })
-    setMembers(updatedMembers)
-    localStorage.setItem("ngo_members", JSON.stringify(updatedMembers))
+    const member = members.find((m) => m.id === loanFormData.memberId)
+    if (member) {
+      const { error: updateError } = await supabase
+        .from("members")
+        .update({
+          total_loans: Number(member.total_loans) + totalAmount,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", loanFormData.memberId)
 
+      if (updateError) {
+        console.error("[v0] Error updating member:", updateError)
+      }
+    }
+
+    await loadData()
     setLoanFormData({ memberId: "", amount: "", interestRate: "", dueDate: "", purpose: "" })
     setIsLoanDialogOpen(false)
   }
 
-  const handleAddPayment = () => {
+  const handleAddPayment = async () => {
     const loan = loans.find((l) => l.id === selectedLoanId)
     if (!loan) return
 
     const paymentAmount = Number.parseFloat(paymentFormData.amount)
-    const newPayment: LoanPayment = {
-      id: Date.now().toString(),
-      loanId: loan.id,
-      amount: paymentAmount,
-      date: new Date().toISOString(),
-      description: paymentFormData.description,
-    }
 
-    const updatedPayments = [...payments, newPayment]
-    setPayments(updatedPayments)
-    localStorage.setItem("ngo_loan_payments", JSON.stringify(updatedPayments))
+    const { error: paymentError } = await supabase.from("loan_payments").insert({
+      loan_id: loan.id,
+      amount: paymentAmount,
+      payment_date: new Date().toISOString(),
+      description: paymentFormData.description,
+    })
+
+    if (paymentError) {
+      console.error("[v0] Error adding payment:", paymentError)
+      return
+    }
 
     // Update loan
-    const newPaidAmount = loan.paidAmount + paymentAmount
-    const newRemainingAmount = loan.totalAmount - newPaidAmount
-    const updatedLoans = loans.map((l) => {
-      if (l.id === loan.id) {
-        return {
-          ...l,
-          paidAmount: newPaidAmount,
-          remainingAmount: Math.max(0, newRemainingAmount),
-          status: newRemainingAmount <= 0 ? ("paid" as const) : l.status,
-        }
-      }
-      return l
-    })
-    setLoans(updatedLoans)
-    localStorage.setItem("ngo_loans", JSON.stringify(updatedLoans))
-
-    // Update member's total loans
-    const member = members.find((m) => m.id === loan.memberId)
-    if (member) {
-      const updatedMembers = members.map((m) => {
-        if (m.id === member.id) {
-          return { ...m, totalLoans: Math.max(0, m.totalLoans - paymentAmount) }
-        }
-        return m
+    const newPaidAmount = Number(loan.paid_amount) + paymentAmount
+    const newRemainingAmount = Number(loan.total_amount) - newPaidAmount
+    const { error: loanUpdateError } = await supabase
+      .from("loans")
+      .update({
+        paid_amount: newPaidAmount,
+        remaining_amount: Math.max(0, newRemainingAmount),
+        status: newRemainingAmount <= 0 ? "paid" : loan.status,
+        updated_at: new Date().toISOString(),
       })
-      setMembers(updatedMembers)
-      localStorage.setItem("ngo_members", JSON.stringify(updatedMembers))
+      .eq("id", loan.id)
+
+    if (loanUpdateError) {
+      console.error("[v0] Error updating loan:", loanUpdateError)
     }
 
+    // Update member's total loans
+    const member = members.find((m) => m.id === loan.member_id)
+    if (member) {
+      const { error: memberUpdateError } = await supabase
+        .from("members")
+        .update({
+          total_loans: Math.max(0, Number(member.total_loans) - paymentAmount),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", member.id)
+
+      if (memberUpdateError) {
+        console.error("[v0] Error updating member:", memberUpdateError)
+      }
+    }
+
+    await loadData()
     setPaymentFormData({ amount: "", description: "" })
     setIsPaymentDialogOpen(false)
   }
 
-  const filteredLoans = loans.filter(
-    (loan) =>
-      loan.memberName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      loan.loanId.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      loan.purpose.toLowerCase().includes(searchQuery.toLowerCase()),
-  )
+  const filteredLoans = loans.filter((loan) => {
+    const memberName = loan.members?.name || ""
+    return (
+      memberName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      loan.loan_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      loan.purpose.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+  })
 
-  const totalLoansIssued = loans.reduce((sum, l) => sum + l.totalAmount, 0)
-  const totalPaid = loans.reduce((sum, l) => sum + l.paidAmount, 0)
-  const totalOutstanding = loans.reduce((sum, l) => sum + l.remainingAmount, 0)
+  const totalLoansIssued = loans.reduce((sum, l) => sum + Number(l.total_amount), 0)
+  const totalPaid = loans.reduce((sum, l) => sum + Number(l.paid_amount), 0)
+  const totalOutstanding = loans.reduce((sum, l) => sum + Number(l.remaining_amount), 0)
   const activeLoans = loans.filter((l) => l.status === "active").length
 
   if (isLoading) {
@@ -238,7 +265,7 @@ export default function LoansPage() {
                     <SelectContent>
                       {members.map((member) => (
                         <SelectItem key={member.id} value={member.id}>
-                          {member.name} ({member.memberId})
+                          {member.name} ({member.member_id})
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -382,58 +409,56 @@ export default function LoansPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredLoans
-                      .sort((a, b) => new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime())
-                      .map((loan) => (
-                        <tr key={loan.id} className="border-b border-gray-100 hover:bg-gray-50">
-                          <td className="py-3 px-4">
-                            <div className="font-mono text-sm font-semibold text-emerald-600">{loan.loanId}</div>
-                          </td>
-                          <td className="py-3 px-4">
-                            <div className="font-medium text-gray-900">{loan.memberName}</div>
-                            <div className="text-sm text-gray-500">{loan.purpose}</div>
-                          </td>
-                          <td className="py-3 px-4">
-                            <div className="font-medium text-gray-900">${loan.amount.toFixed(2)}</div>
-                          </td>
-                          <td className="py-3 px-4 text-gray-700">{loan.interestRate}%</td>
-                          <td className="py-3 px-4">
-                            <div className="font-medium text-emerald-600">${loan.paidAmount.toFixed(2)}</div>
-                          </td>
-                          <td className="py-3 px-4">
-                            <div className="font-medium text-orange-600">${loan.remainingAmount.toFixed(2)}</div>
-                          </td>
-                          <td className="py-3 px-4 text-gray-700">{new Date(loan.dueDate).toLocaleDateString()}</td>
-                          <td className="py-3 px-4">
-                            <Badge
-                              variant={
-                                loan.status === "paid"
-                                  ? "default"
-                                  : loan.status === "overdue"
-                                    ? "destructive"
-                                    : "secondary"
-                              }
+                    {filteredLoans.map((loan) => (
+                      <tr key={loan.id} className="border-b border-gray-100 hover:bg-gray-50">
+                        <td className="py-3 px-4">
+                          <div className="font-mono text-sm font-semibold text-emerald-600">{loan.loan_id}</div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="font-medium text-gray-900">{loan.members?.name}</div>
+                          <div className="text-sm text-gray-500">{loan.purpose}</div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="font-medium text-gray-900">${Number(loan.amount).toFixed(2)}</div>
+                        </td>
+                        <td className="py-3 px-4 text-gray-700">{loan.interest_rate}%</td>
+                        <td className="py-3 px-4">
+                          <div className="font-medium text-emerald-600">${Number(loan.paid_amount).toFixed(2)}</div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="font-medium text-orange-600">${Number(loan.remaining_amount).toFixed(2)}</div>
+                        </td>
+                        <td className="py-3 px-4 text-gray-700">{new Date(loan.due_date).toLocaleDateString()}</td>
+                        <td className="py-3 px-4">
+                          <Badge
+                            variant={
+                              loan.status === "paid"
+                                ? "default"
+                                : loan.status === "overdue"
+                                  ? "destructive"
+                                  : "secondary"
+                            }
+                          >
+                            {loan.status}
+                          </Badge>
+                        </td>
+                        <td className="py-3 px-4">
+                          {loan.status !== "paid" && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setSelectedLoanId(loan.id)
+                                setIsPaymentDialogOpen(true)
+                              }}
+                              className="text-emerald-600 hover:text-emerald-700"
                             >
-                              {loan.status}
-                            </Badge>
-                          </td>
-                          <td className="py-3 px-4">
-                            {loan.status !== "paid" && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => {
-                                  setSelectedLoanId(loan.id)
-                                  setIsPaymentDialogOpen(true)
-                                }}
-                                className="text-emerald-600 hover:text-emerald-700"
-                              >
-                                Add Payment
-                              </Button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
+                              Add Payment
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -454,10 +479,10 @@ export default function LoansPage() {
                     const loan = loans.find((l) => l.id === selectedLoanId)
                     return loan ? (
                       <>
-                        <div className="text-sm text-gray-600">Loan ID: {loan.loanId}</div>
-                        <div className="text-sm text-gray-600">Member: {loan.memberName}</div>
+                        <div className="text-sm text-gray-600">Loan ID: {loan.loan_id}</div>
+                        <div className="text-sm text-gray-600">Member: {loan.members?.name}</div>
                         <div className="text-sm font-semibold text-gray-900 mt-1">
-                          Remaining: ${loan.remainingAmount.toFixed(2)}
+                          Remaining: ${Number(loan.remaining_amount).toFixed(2)}
                         </div>
                       </>
                     ) : null

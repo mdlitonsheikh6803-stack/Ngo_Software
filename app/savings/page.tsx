@@ -92,6 +92,7 @@ export default function SavingsPage() {
       amount,
       payment_method: formData.paymentMethod,
       description: formData.description,
+      transaction_date: new Date().toISOString(),
     })
 
     if (transactionError) {
@@ -109,7 +110,10 @@ export default function SavingsPage() {
 
       const { error: updateError } = await supabase
         .from("members")
-        .update({ total_savings: newTotal })
+        .update({
+          total_savings: newTotal,
+          updated_at: new Date().toISOString(),
+        })
         .eq("id", formData.memberId)
 
       if (updateError) {
