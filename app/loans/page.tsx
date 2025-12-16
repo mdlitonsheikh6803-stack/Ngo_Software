@@ -227,10 +227,12 @@ export default function LoansPage() {
 
   const filteredLoans = loans.filter((loan) => {
     const memberName = loan.members?.name || ""
+    const loanId = loan.loan_id || ""
+    const purpose = loan.purpose || ""
     return (
       memberName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      loan.loan_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      loan.purpose.toLowerCase().includes(searchQuery.toLowerCase())
+      loanId.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      purpose.toLowerCase().includes(searchQuery.toLowerCase())
     )
   })
 
